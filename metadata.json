@@ -1,0 +1,5 @@
+{
+  "name": "LuminaStudio",
+  "description": "A lighting image generation app that creates professional product shots from a single lamp image.",
+  "requestFramePermissions": []
+}

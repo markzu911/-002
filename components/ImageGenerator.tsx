@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Upload, Image as ImageIcon, Loader2, Lightbulb, LightbulbOff, X, Download, ZoomIn } from 'lucide-react';
 import { GoogleGenAI } from '@google/genai';
@@ -63,6 +63,47 @@ export default function ImageGenerator() {
   const [results, setResults] = useState<GeneratedImage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [previewImage, setPreviewImage] = useState<GeneratedImage | null>(null);
+  const [saasInfo, setSaasInfo] = useState<{userId?: string; toolId?: string}>({});
+
+  useEffect(() => {
+    const handleMessage = async (event: MessageEvent) => {
+      // Check for valid API init payload
+      if (event.data && event.data.type === 'SAAS_INIT') {
+        const { userId, toolId, context, prompt } = event.data;
+        if (userId && toolId && userId !== 'null' && toolId !== 'null' && userId !== 'undefined' && toolId !== 'undefined') {
+          setSaasInfo({ userId, toolId });
+        }
+        
+        let initialPrompt = '';
+        if (context && context !== 'null' && context !== 'undefined') {
+          initialPrompt += context + ' ';
+        }
+        if (Array.isArray(prompt)) {
+          const validPrompts = prompt.filter(p => typeof p === 'string' && p !== 'null' && p !== 'undefined');
+          if (validPrompts.length > 0) {
+            initialPrompt += validPrompts.join(', ');
+          }
+        }
+        if (initialPrompt.trim()) {
+          setCustomPrompt(initialPrompt.trim());
+        }
+
+        try {
+          if (userId && toolId && userId !== 'null' && toolId !== 'null') {
+            await fetch('/api/tool/launch', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId, toolId }),
+            });
+          }
+        } catch (err) {
+          console.error('SaaS Launch tracking failed', err);
+        }
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const selected = acceptedFiles[0];
@@ -94,6 +135,29 @@ export default function ImageGenerator() {
     if (!file) {
       setError('请先上传灯具图片。');
       return;
+    }
+
+    if (!process.env.NEXT_PUBLIC_GEMINI_API_KEY) {
+      setError('未检测到 Gemini API Key，请在 Vercel 环境变量中配置 NEXT_PUBLIC_GEMINI_API_KEY 并重新部署。');
+      return;
+    }
+
+    if (saasInfo.userId && saasInfo.toolId) {
+      try {
+        const verifyRes = await fetch('/api/tool/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: saasInfo.userId, toolId: saasInfo.toolId }),
+        });
+        const verifyData = await verifyRes.json();
+        if (!verifyRes.ok || !(verifyData.success || verifyData.valid)) {
+          setError(verifyData.message || '积分不足，无法生成图片。');
+          return;
+        }
+      } catch (err: any) {
+        setError('积分校验系统异常，请稍后重试。');
+        return;
+      }
     }
 
     setIsGenerating(true);
@@ -173,6 +237,15 @@ export default function ImageGenerator() {
         const generatedShot = await generateShot(shot);
         setResults((prev) => [...prev, generatedShot]);
       }
+
+      if (saasInfo.userId && saasInfo.toolId) {
+        fetch('/api/tool/consume', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: saasInfo.userId, toolId: saasInfo.toolId }),
+        }).catch(err => console.error('SaaS Consume failed', err));
+      }
+
     } catch (err: any) {
       console.error(err);
       setError(err.message || '生成图片时发生错误。');
